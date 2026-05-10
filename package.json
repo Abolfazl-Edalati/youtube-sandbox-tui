@@ -1,12 +1,26 @@
 {
-  "name": "yt-sandbox-tui",
+  "name": "bun-youtube-sandbox-tui",
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "start": "bun run src/index.tsx",
+    "dev": "bun --watch src/index.tsx"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/react": "^19.2.14"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "conf": "^15.1.0",
+    "ink": "^7.0.2",
+    "ink-select-input": "^6.2.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "octokit": "^5.0.5"
   }
 }
