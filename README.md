@@ -1,3 +1,5 @@
+[فارسی](README.fa.md) | English
+
 # 🎬 youtube-sandbox-tui
 
 A terminal UI for [youtube-sandbox](https://github.com/arbtech/youtube-sandbox) — trigger YouTube downloads via GitHub Actions, monitor progress, browse downloaded files, and manage your repo, all without leaving your terminal.
