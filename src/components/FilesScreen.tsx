@@ -9,7 +9,16 @@ import { getConfig } from '../lib/config.ts';
 import { deleteFile, listDownloads } from '../lib/github.ts';
 import type { FileEntry, Screen } from '../types.ts';
 
-type ViewState = 'loading' | 'list' | 'confirm' | 'downloading' | 'deleting' | 'done' | 'error' | 'empty';
+type ViewState =
+  | 'loading'
+  | 'list'
+  | 'confirm'
+  | 'downloading'
+  | 'downloading-all' // new
+  | 'deleting'
+  | 'done'
+  | 'error'
+  | 'empty';
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -18,20 +27,19 @@ function formatSize(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
-// ── Custom navigable list ───────────────────────────────────────────────────
-// Replaces ink-select-input so we can intercept extra hotkeys (D = delete)
+// ── Custom navigable list ─────────────────────────────────────────────────
 function FileList({
   items,
   onEnter,
   onDelete,
+  onDownloadAll,
 }: {
   items: { label: string; value: string }[];
   onEnter: (value: string) => void;
   onDelete: (value: string) => void;
+  onDownloadAll: (value: string) => void; // new
 }) {
   const [index, setIndex] = useState(0);
-
-  // Keep index in bounds if items list shrinks (e.g. after a delete)
   const clampedIndex = Math.min(index, items.length - 1);
 
   useInput((input, key) => {
@@ -43,12 +51,19 @@ function FileList({
       setIndex((i) => Math.min(items.length - 1, i + 1));
       return;
     }
-    if (key.return) {
-      if (items[clampedIndex]) onEnter(items[clampedIndex].value);
-      return;
-    }
-    if (input === 'd' || input === 'D') {
-      if (items[clampedIndex]) onDelete(items[clampedIndex].value);
+    if (items[clampedIndex]) {
+      if (key.return) {
+        onEnter(items[clampedIndex].value);
+        return;
+      }
+      if (input === 'd' || input === 'D') {
+        onDelete(items[clampedIndex].value);
+        return;
+      }
+      if (input === 'a' || input === 'A') {
+        onDownloadAll(items[clampedIndex].value);
+        return;
+      }
     }
   });
 
@@ -65,7 +80,7 @@ function FileList({
   );
 }
 
-// ── Main screen ─────────────────────────────────────────────────────────────
+// ── Main screen ───────────────────────────────────────────────────────────
 export default function FilesScreen({ onNav }: { onNav: (s: Screen) => void }) {
   const [view, setView] = useState<ViewState>('loading');
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -73,10 +88,11 @@ export default function FilesScreen({ onNav }: { onNav: (s: Screen) => void }) {
   const [selected, setSelected] = useState<FileEntry | null>(null);
   const [message, setMessage] = useState('');
   const [progress, setProgress] = useState('');
+  const [batchStatus, setBatchStatus] = useState({ current: 0, total: 0, name: '' });
   const [error, setError] = useState('');
 
   useInput((input, key) => {
-    if (view === 'downloading' || view === 'deleting') return;
+    if (view === 'downloading' || view === 'downloading-all' || view === 'deleting') return;
     if (key.escape || input === 'q' || input === 'Q') {
       if (view === 'confirm') {
         setView('list');
@@ -107,7 +123,7 @@ export default function FilesScreen({ onNav }: { onNav: (s: Screen) => void }) {
     setView('list');
   }
 
-  // Enter key → download (or drill into folder)
+  // Enter → download file or drill into folder
   function handleEnter(value: string) {
     if (value === '__back__') {
       setFolder(null);
@@ -122,27 +138,114 @@ export default function FilesScreen({ onNav }: { onNav: (s: Screen) => void }) {
     downloadFile(entry);
   }
 
-  // D key → confirm then delete
+  // D → confirm then delete
   function handleDelete(value: string) {
-    if (value === '__back__') return; // can't delete the back button
+    if (value === '__back__') return;
     const entry = files.find((f) => f.path === value);
     if (!entry) return;
     setSelected(entry);
     setView('confirm');
   }
 
-  const confirmItems = [
-    { label: 'Yes, delete it', value: 'go' },
-    { label: 'No, go back', value: 'cancel' },
-  ];
+  // A → download all files in a directory (or single file if cursor is on one)
+  async function handleDownloadAll(value: string) {
+    if (value === '__back__') return;
+    const entry = files.find((f) => f.path === value);
+    if (!entry) return;
 
-  async function handleConfirm(item: { value: string }) {
-    if (item.value === 'cancel') {
-      setSelected(null);
-      setView('list');
+    if (entry.type === 'file') {
+      // A on a file behaves like Enter
+      downloadFile(entry);
       return;
     }
-    await doDelete(selected!);
+
+    await downloadDirectory(entry);
+  }
+
+  async function downloadDirectory(dir: FileEntry) {
+    setView('downloading-all');
+    const config = getConfig() as any;
+
+    try {
+      const children = ((await listDownloads(config, dir.path)) as FileEntry[]).filter((f) => f.type === 'file');
+
+      if (children.length === 0) {
+        setMessage(`No files found in ${dir.name}/`);
+        setView('done');
+        return;
+      }
+
+      setBatchStatus({ current: 0, total: children.length, name: '' });
+
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        if (child) {
+          setBatchStatus({ current: i + 1, total: children.length, name: child.name });
+          setProgress(`Fetching ${child.name}...`);
+          await downloadFile(child, /* silent */ true);
+        }
+      }
+
+      setMessage(
+        `Downloaded ${children.length} file${children.length !== 1 ? 's' : ''} from ${dir.name}/ to ~/Downloads`,
+      );
+      setView('done');
+      setTimeout(() => load(folder), 1200);
+    } catch (e: any) {
+      setError(e.message);
+      setView('error');
+    }
+  }
+
+  // Core file download — `silent` skips managing view state (used by downloadDirectory)
+  async function downloadFile(entry: FileEntry, silent = false) {
+    if (!entry.download_url) {
+      setError('No download URL available for this file.');
+      setView('error');
+      return;
+    }
+
+    if (!silent) {
+      setView('downloading');
+      setProgress(`Fetching ${entry.name}...`);
+    }
+
+    try {
+      const response = await fetch(entry.download_url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const contentLength = Number(response.headers.get('content-length') ?? 0);
+      const savePath = path.join(os.homedir(), 'Downloads', entry.name);
+      const reader = response.body!.getReader();
+      const fileStream = fs.createWriteStream(savePath);
+      let received = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fileStream.write(value);
+        received += value.byteLength;
+        setProgress(
+          contentLength > 0
+            ? `${((received / contentLength) * 100).toFixed(1)}%  (${formatSize(received)} / ${formatSize(contentLength)})`
+            : `Downloaded ${formatSize(received)}...`,
+        );
+      }
+
+      await new Promise<void>((res, rej) => {
+        fileStream.end((err?: Error | null) => (err ? rej(err) : res()));
+      });
+
+      if (!silent) {
+        setMessage(`Saved to ~/Downloads/${entry.name}`);
+        setSelected(null);
+        setView('done');
+        setTimeout(() => load(folder), 1200);
+      }
+    } catch (e: any) {
+      setError(e.message);
+      setView('error');
+    }
   }
 
   async function doDelete(entry: FileEntry) {
@@ -174,50 +277,18 @@ export default function FilesScreen({ onNav }: { onNav: (s: Screen) => void }) {
     }
   }
 
-  async function downloadFile(entry: FileEntry) {
-    if (!entry.download_url) {
-      setError('No download URL available for this file.');
-      setView('error');
+  const confirmItems = [
+    { label: 'Yes, delete it', value: 'go' },
+    { label: 'No, go back', value: 'cancel' },
+  ];
+
+  async function handleConfirm(item: { value: string }) {
+    if (item.value === 'cancel') {
+      setSelected(null);
+      setView('list');
       return;
     }
-
-    setView('downloading');
-    setProgress(`Fetching ${entry.name}...`);
-
-    try {
-      const response = await fetch(entry.download_url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const contentLength = Number(response.headers.get('content-length') ?? 0);
-      const savePath = path.join(os.homedir(), 'Downloads', entry.name);
-      const reader = response.body!.getReader();
-      const fileStream = fs.createWriteStream(savePath);
-      let received = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        fileStream.write(value);
-        received += value.byteLength;
-        setProgress(
-          contentLength > 0
-            ? `${((received / contentLength) * 100).toFixed(1)}%  (${formatSize(received)} / ${formatSize(contentLength)})`
-            : `Downloaded ${formatSize(received)}...`,
-        );
-      }
-
-      await new Promise<void>((res, rej) => {
-        fileStream.end((err?: Error | null) => (err ? rej(err) : res()));
-      });
-
-      setMessage(`Saved to ~/Downloads/${entry.name}`);
-      setSelected(null);
-      setView('done');
-      setTimeout(() => load(folder), 1200);
-    } catch (e: any) {
-      setError(e.message);
-      setView('error');
-    }
+    await doDelete(selected!);
   }
 
   const listItems = [
@@ -256,10 +327,10 @@ export default function FilesScreen({ onNav }: { onNav: (s: Screen) => void }) {
       {view === 'list' && (
         <Box flexDirection='column' gap={1}>
           <Text dimColor>
-            {files.length} item{files.length !== 1 ? 's' : ''} — ↑↓ navigate · Enter download · D delete · Q{' '}
-            {folder ? 'back' : 'home'}
+            {files.length} item{files.length !== 1 ? 's' : ''} — ↑↓ navigate · Enter download · A download dir · D
+            delete · Q {folder ? 'back' : 'home'}
           </Text>
-          <FileList items={listItems} onEnter={handleEnter} onDelete={handleDelete} />
+          <FileList items={listItems} onEnter={handleEnter} onDelete={handleDelete} onDownloadAll={handleDownloadAll} />
         </Box>
       )}
 
@@ -282,6 +353,25 @@ export default function FilesScreen({ onNav }: { onNav: (s: Screen) => void }) {
             <Text>Downloading...</Text>
           </Box>
           <Text color='cyan'>{progress}</Text>
+        </Box>
+      )}
+
+      {view === 'downloading-all' && (
+        <Box flexDirection='column' gap={1}>
+          <Box gap={1}>
+            <Text color='green'>
+              <Spinner type='dots' />
+            </Text>
+            <Text>
+              Downloading file{' '}
+              <Text bold color='cyan'>
+                {batchStatus.current}/{batchStatus.total}
+              </Text>
+              {'  '}
+              {batchStatus.name}
+            </Text>
+          </Box>
+          <Text dimColor>{progress}</Text>
         </Box>
       )}
 
