@@ -1,10 +1,11 @@
-import * as fs from 'fs';
-import { Octokit } from 'octokit';
-import type { AppConfig, DownloadOptions } from '../types.ts';
+import * as fs from "fs";
+import { Octokit } from "octokit";
+import type { AppConfig, DownloadOptions } from "../types.ts";
 
 export function buildCommitMessage(opts: DownloadOptions): string {
   let msg = `yt-dlp: ${opts.url}`;
-  if (opts.quality && opts.quality !== 'best') msg += ` quality: ${opts.quality}`;
+  if (opts.quality && opts.quality !== "best")
+    msg += ` quality: ${opts.quality}`;
   if (opts.audioOnly) msg += ` audio-only: true`;
   if (opts.subtitles) msg += ` subtitles: true`;
   if (opts.playlist) msg += ` playlist: true`;
@@ -12,7 +13,10 @@ export function buildCommitMessage(opts: DownloadOptions): string {
   return msg;
 }
 
-export async function triggerDownload(config: AppConfig, opts: DownloadOptions): Promise<string> {
+export async function triggerDownload(
+  config: AppConfig,
+  opts: DownloadOptions,
+): Promise<string> {
   const octokit = new Octokit({ auth: config.token });
   const { owner, repo } = config;
 
@@ -20,28 +24,32 @@ export async function triggerDownload(config: AppConfig, opts: DownloadOptions):
   const { data: fileData } = await octokit.rest.repos.getContent({
     owner,
     repo,
-    path: 'README.md',
+    path: "README.md",
   });
 
-  if (Array.isArray(fileData) || fileData.type !== 'file') {
-    throw new Error('Unexpected response for README.md');
+  if (Array.isArray(fileData) || fileData.type !== "file") {
+    throw new Error("Unexpected response for README.md");
   }
 
   const commitMessage = buildCommitMessage(opts);
 
-  const { data: commitData } = await octokit.rest.repos.createOrUpdateFileContents({
-    owner,
-    repo,
-    path: 'README.md',
-    message: commitMessage,
-    content: fileData.content, // same content, no actual change
-    sha: fileData.sha,
-  });
+  const { data: commitData } =
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      path: "README.md",
+      message: commitMessage,
+      content: fileData.content, // same content, no actual change
+      sha: fileData.sha,
+    });
 
   return commitData.commit.sha!;
 }
 
-export async function getLatestWorkflowRun(config: AppConfig, commitSha: string) {
+export async function getLatestWorkflowRun(
+  config: AppConfig,
+  commitSha: string,
+) {
   const octokit = new Octokit({ auth: config.token });
   const { data } = await octokit.rest.actions.listWorkflowRunsForRepo({
     owner: config.owner,
@@ -53,7 +61,7 @@ export async function getLatestWorkflowRun(config: AppConfig, commitSha: string)
 }
 
 // Update the existing listDownloads function signature:
-export async function listDownloads(config: AppConfig, subPath = 'downloads') {
+export async function listDownloads(config: AppConfig, subPath = "downloads") {
   const octokit = new Octokit({ auth: config.token });
 
   try {
@@ -70,14 +78,18 @@ export async function listDownloads(config: AppConfig, subPath = 'downloads') {
   }
 }
 
-export async function deleteFile(config: AppConfig, filePath: string, sha: string): Promise<void> {
+export async function deleteFile(
+  config: AppConfig,
+  filePath: string,
+  sha: string,
+): Promise<void> {
   const octokit = new Octokit({ auth: config.token });
 
   await octokit.rest.repos.deleteFile({
     owner: config.owner,
     repo: config.repo,
     path: filePath,
-    message: `Remove ${filePath.split('/').pop()} [skip ci]`,
+    message: `Remove ${filePath.split("/").pop()} [skip ci]`,
     sha,
   });
 }
@@ -88,17 +100,20 @@ export async function downloadFileViaApi(
   savePath: string,
   onProgress: (received: number, total: number) => void,
 ): Promise<void> {
-  const response = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/git/blobs/${sha}`, {
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      Accept: 'application/vnd.github.raw',
-      'X-GitHub-Api-Version': '2022-11-28',
+  const response = await fetch(
+    `https://api.github.com/repos/${config.owner}/${config.repo}/git/blobs/${sha}`,
+    {
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        Accept: "application/vnd.github.raw",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
     },
-  });
+  );
 
   if (!response.ok) throw new Error(`GitHub API error: ${response.status}`);
 
-  const contentLength = Number(response.headers.get('content-length') ?? 0);
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
   const reader = response.body!.getReader();
   const fileStream = fs.createWriteStream(savePath);
   let received = 0;
@@ -123,20 +138,23 @@ export async function downloadBlob(
   fileSize: number,
   onProgress: (received: number, total: number) => void,
 ): Promise<void> {
-  const response = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/git/blobs/${sha}`, {
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
+  const response = await fetch(
+    `https://api.github.com/repos/${config.owner}/${config.repo}/git/blobs/${sha}`,
+    {
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
     },
-  });
+  );
 
   if (!response.ok) {
     throw new Error(`GitHub API error: ${response.status}`);
   }
 
   if (!response.body) {
-    throw new Error('Empty response body');
+    throw new Error("Empty response body");
   }
 
   const reader = response.body.getReader();
@@ -155,13 +173,16 @@ export async function downloadBlob(
     // Base64 expands data by ~33%
     // Estimate decoded size from transport size
     // Cap at 95% until fully decoded/written
-    const estimatedDecoded = Math.min(Math.floor(received * 0.75), Math.floor(fileSize * 0.95));
+    const estimatedDecoded = Math.min(
+      Math.floor(received * 0.75),
+      Math.floor(fileSize * 0.95),
+    );
 
     onProgress(estimatedDecoded, fileSize);
   }
 
   // Combine streamed JSON chunks
-  const jsonText = Buffer.concat(chunks).toString('utf8');
+  const jsonText = Buffer.concat(chunks).toString("utf8");
 
   const json = JSON.parse(jsonText) as {
     content: string;
@@ -169,12 +190,12 @@ export async function downloadBlob(
     size: number;
   };
 
-  if (json.encoding !== 'base64') {
+  if (json.encoding !== "base64") {
     throw new Error(`Unexpected encoding: ${json.encoding}`);
   }
 
   // GitHub inserts line breaks in base64 content
-  const buffer = Buffer.from(json.content.replace(/\n/g, ''), 'base64');
+  const buffer = Buffer.from(json.content.replace(/\n/g, ""), "base64");
 
   await Bun.write(savePath, buffer);
 
