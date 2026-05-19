@@ -1,4 +1,3 @@
-import * as fs from "fs";
 import { Box, Text, useInput } from "ink";
 import SelectInput from "ink-select-input";
 import Spinner from "ink-spinner";
@@ -6,7 +5,7 @@ import * as os from "os";
 import * as path from "path";
 import React, { useEffect, useState } from "react";
 import { getConfig } from "../lib/config.ts";
-import { deleteFile, listDownloads } from "../lib/github.ts";
+import { deleteFile, downloadBlob, listDownloads } from "../lib/github.ts";
 import type { FileEntry, Screen } from "../types.ts";
 
 type ViewState =
@@ -211,47 +210,38 @@ export default function FilesScreen({ onNav }: { onNav: (s: Screen) => void }) {
     }
   }
 
-  // Core file download — `silent` skips managing view state (used by downloadDirectory)
   async function downloadFile(entry: FileEntry, silent = false) {
-    if (!entry.download_url) {
-      setError("No download URL available for this file.");
+    if (!entry.sha) {
+      setError("Missing file SHA, cannot download via API.");
       setView("error");
       return;
     }
 
     if (!silent) {
       setView("downloading");
-      setProgress(`Fetching ${entry.name}...`);
+      setProgress("Connecting to GitHub API...");
     }
 
     try {
-      const response = await fetch(entry.download_url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const contentLength = Number(response.headers.get("content-length") ?? 0);
+      const config = getConfig() as any;
       const savePath = path.join(os.homedir(), "Downloads", entry.name);
-      const reader = response.body!.getReader();
-      const fileStream = fs.createWriteStream(savePath);
-      let received = 0;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        fileStream.write(value);
-        received += value.byteLength;
-        setProgress(
-          contentLength > 0
-            ? `${((received / contentLength) * 100).toFixed(1)}%  (${formatSize(received)} / ${formatSize(contentLength)})`
-            : `Downloaded ${formatSize(received)}...`,
-        );
-      }
-
-      await new Promise<void>((res, rej) => {
-        fileStream.end((err?: Error | null) => (err ? rej(err) : res()));
-      });
+      await downloadBlob(
+        config,
+        entry.sha,
+        savePath,
+        entry.size,
+        (received, total) => {
+          setProgress(
+            total > 0
+              ? `${((received / total) * 100).toFixed(1)}%  (${formatSize(received)} / ${formatSize(total)})`
+              : `Downloaded ${formatSize(received)}...`,
+          );
+        },
+      );
 
       if (!silent) {
-        setMessage(`Saved to ~/Downloads/${entry.name}`);
+        setMessage(`Saved to ${savePath}`);
         setSelected(null);
         setView("done");
         setTimeout(() => load(folder), 1200);

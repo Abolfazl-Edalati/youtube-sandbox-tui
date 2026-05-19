@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import { Octokit } from 'octokit';
 import type { AppConfig, DownloadOptions } from '../types.ts';
 
@@ -79,4 +80,104 @@ export async function deleteFile(config: AppConfig, filePath: string, sha: strin
     message: `Remove ${filePath.split('/').pop()} [skip ci]`,
     sha,
   });
+}
+
+export async function downloadFileViaApi(
+  config: AppConfig,
+  sha: string,
+  savePath: string,
+  onProgress: (received: number, total: number) => void,
+): Promise<void> {
+  const response = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/git/blobs/${sha}`, {
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      Accept: 'application/vnd.github.raw',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (!response.ok) throw new Error(`GitHub API error: ${response.status}`);
+
+  const contentLength = Number(response.headers.get('content-length') ?? 0);
+  const reader = response.body!.getReader();
+  const fileStream = fs.createWriteStream(savePath);
+  let received = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    fileStream.write(value);
+    received += value.byteLength;
+    onProgress(received, contentLength);
+  }
+
+  await new Promise<void>((res, rej) => {
+    fileStream.end((err?: Error | null) => (err ? rej(err) : res()));
+  });
+}
+
+export async function downloadBlob(
+  config: AppConfig,
+  sha: string,
+  savePath: string,
+  fileSize: number,
+  onProgress: (received: number, total: number) => void,
+): Promise<void> {
+  const response = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/git/blobs/${sha}`, {
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub API error: ${response.status}`);
+  }
+
+  if (!response.body) {
+    throw new Error('Empty response body');
+  }
+
+  const reader = response.body.getReader();
+
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) break;
+
+    chunks.push(value);
+    received += value.byteLength;
+
+    // Base64 expands data by ~33%
+    // Estimate decoded size from transport size
+    // Cap at 95% until fully decoded/written
+    const estimatedDecoded = Math.min(Math.floor(received * 0.75), Math.floor(fileSize * 0.95));
+
+    onProgress(estimatedDecoded, fileSize);
+  }
+
+  // Combine streamed JSON chunks
+  const jsonText = Buffer.concat(chunks).toString('utf8');
+
+  const json = JSON.parse(jsonText) as {
+    content: string;
+    encoding: string;
+    size: number;
+  };
+
+  if (json.encoding !== 'base64') {
+    throw new Error(`Unexpected encoding: ${json.encoding}`);
+  }
+
+  // GitHub inserts line breaks in base64 content
+  const buffer = Buffer.from(json.content.replace(/\n/g, ''), 'base64');
+
+  await Bun.write(savePath, buffer);
+
+  // Final accurate progress update
+  onProgress(buffer.byteLength, buffer.byteLength);
 }
