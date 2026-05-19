@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import React, { useEffect, useState } from 'react';
 import { getConfig } from '../lib/config.ts';
-import { deleteFile, downloadFileViaApi, listDownloads } from '../lib/github.ts';
+import { deleteFile, downloadBlob, listDownloads } from '../lib/github.ts';
 import type { FileEntry, Screen } from '../types.ts';
 
 type ViewState =
@@ -212,7 +212,7 @@ export default function FilesScreen({ onNav }: { onNav: (s: Screen) => void }) {
       const config = getConfig() as any;
       const savePath = path.join(os.homedir(), 'Downloads', entry.name);
 
-      await downloadFileViaApi(config, entry.sha, savePath, (received, total) => {
+      await downloadBlob(config, entry.sha, savePath, entry.size, (received, total) => {
         setProgress(
           total > 0
             ? `${((received / total) * 100).toFixed(1)}%  (${formatSize(received)} / ${formatSize(total)})`
